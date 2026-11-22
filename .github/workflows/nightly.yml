@@ -1,0 +1,58 @@
+name: tests
+
+# Every push and pull request, and every night against Pipecat's main branch, so a change in Pipecat that breaks the
+# strategy shows here before it reaches a release. The tests use a local stand-in for Bell's API and need no key.
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Pipecat ${{ matrix.pipecat }}, Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+        pipecat: ["1.16.0", "main"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          if [ "${{ matrix.pipecat }}" = "main" ]; then
+            pip install "pipecat-ai @ git+https://github.com/pipecat-ai/pipecat.git@main"
+          else
+            pip install "pipecat-ai==${{ matrix.pipecat }}"
+          fi
+          pip install ".[test]"
+          pip show pipecat-ai | head -2
+      - name: Check the job tests the Pipecat it names
+        # Installing the package must not swap Pipecat's main branch for a release, or the other way round.
+        run: |
+          python - <<'EOF'
+          import importlib.metadata as md
+          import sys
+
+          want = "${{ matrix.pipecat }}"
+          dist = md.distribution("pipecat-ai")
+          source = dist.read_text("direct_url.json") or ""
+          print("pipecat-ai", dist.version, source or "(a release)")
+          if want == "main":
+              ok = "github.com/pipecat-ai/pipecat" in source
+          else:
+              ok = dist.version == want and "github.com" not in source
+          sys.exit(0 if ok else f"expected Pipecat {want}, found {dist.version} {source}")
+          EOF
+      - name: Test
+        run: python -m pytest -v

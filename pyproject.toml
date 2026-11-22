@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pipecat-rabel"
+dynamic = ["version"]
+description = "Pipecat user turn strategy for Rabel Bell: an early start for your agent's reply, beside Deepgram Flux's eager end of turn"
+readme = "README.md"
+license = "BSD-2-Clause"
+license-files = ["LICENSE"]
+authors = [{ name = "Rabel Labs" }]
+requires-python = ">=3.11"
+dependencies = [
+    "pipecat-ai>=1.16.0,<2",
+    "websockets>=15",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+    "Framework :: AsyncIO",
+]
+
+[project.optional-dependencies]
+example = ["pipecat-ai[anthropic,deepgram,runner,webrtc]>=1.16.0,<2"]
+test = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.urls]
+Homepage = "https://rabellabs.com"
+Source = "https://github.com/rabellabs/pipecat-rabel"
+Issues = "https://github.com/rabellabs/pipecat-rabel/issues"
+Documentation = "https://rabellabs.com/docs"
+
+[tool.hatch.version]
+path = "src/pipecat_rabel/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pipecat_rabel"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["/lab"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

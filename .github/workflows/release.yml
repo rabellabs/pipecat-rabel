@@ -1,0 +1,96 @@
+name: release
+
+# Builds pipecat-rabel's wheel and source distribution from the checked-out commit, checks them, and uploads them to PyPI
+# through PyPI's trusted publishing. Run by hand only, from the Actions tab or `gh workflow run release.yml`: never on a
+# push or a tag. With `dry_run` (the default) it does everything but the upload.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and check only; do not upload to PyPI"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          ls -l dist
+      - name: twine check
+        run: python -m twine check --strict dist/*
+      - name: Check the file lists
+        # The wheel holds only the package and its licence; the source distribution leaves lab/ out.
+        run: |
+          python - <<'EOF'
+          import glob
+          import re
+          import sys
+          import tarfile
+          import zipfile
+
+          version = re.search(r'__version__ = "([^"]+)"', open("src/pipecat_rabel/__init__.py").read()).group(1)
+          wheels = glob.glob("dist/*.whl")
+          sdists = glob.glob("dist/*.tar.gz")
+          bad = []
+          if len(wheels) != 1 or len(sdists) != 1:
+              sys.exit(f"expected one wheel and one source distribution, found {wheels} {sdists}")
+          for path in wheels + sdists:
+              if f"-{version}" not in path:
+                  bad.append(f"{path} is not version {version}")
+
+          names = zipfile.ZipFile(wheels[0]).namelist()
+          print(f"wheel {wheels[0]}:")
+          for n in names:
+              print("  ", n)
+              top = n.split("/")[0]
+              if top != "pipecat_rabel" and not top.endswith(".dist-info"):
+                  bad.append(f"wheel holds {n}")
+          licences = [n for n in names if "/licenses/" in n]
+          if not licences:
+              bad.append("wheel holds no licence")
+
+          names = tarfile.open(sdists[0]).getnames()
+          print(f"source distribution {sdists[0]}:")
+          for n in names:
+              print("  ", n)
+              parts = n.split("/")
+              if len(parts) > 1 and parts[1] == "lab":
+                  bad.append(f"source distribution holds {n}")
+
+          if bad:
+              sys.exit("\n".join(bad))
+          print(f"file lists as expected for {version}")
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Upload to PyPI
+    needs: build
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
