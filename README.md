@@ -13,7 +13,7 @@ turn Pipecat keeps the reply only if the final words match the guess; otherwise 
 the final words. The package adds nothing to your pipeline, sends no frame and replaces no service.
 
 Bell runs on Rabel's servers: there is nothing to host and no GPU. The API's docs:
-[rabellabs.com/docs](https://rabellabs.com/docs). Tested with Pipecat 1.16.0. The numbers here come from recorded,
+[rabellabs.com/docs](https://rabellabs.com/docs). Tested with Pipecat 1.16.0 and 1.17.0. The numbers here come from recorded,
 scripted calls to one bank, in English, on Deepgram Flux's words; the rest is under [Limits](#limits).
 
 **What Rabel keeps.** Bell never receives audio. It takes nothing but the words from your
@@ -166,7 +166,7 @@ uv run --extra test pytest
 112 tests, with no key and no network, against a local stand-in for the API, with the strategy in Pipecat's own user
 aggregator. A [workflow](https://github.com/rabellabs/pipecat-rabel/blob/main/.github/workflows/nightly.yml) also runs them every night against Pipecat's main branch.
 
-Tested with Pipecat 1.16.0 on Python 3.11, 3.12 and 3.13.
+Tested with Pipecat 1.16.0 and 1.17.0 on Python 3.11, 3.12 and 3.13.
 
 ## License
 
