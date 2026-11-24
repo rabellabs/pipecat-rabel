@@ -19,9 +19,9 @@ scripted calls to one bank, in English, on Deepgram Flux's words; the rest is un
 **What Rabel keeps.** Bell never receives audio. It takes nothing but the words from your
 speech-to-text and holds a call's words only while that call is open. When the call closes, Bell learns from them for
 your agent and drops them. What it learns stays with your agent and is never filed under a call or under a caller's name
-or number. Part of it is kept as codes that Rabel holds the key to, and the rest is short phrases kept in words. A phrase
-can be a name or a number your callers say. You can list your agent's phrases at any time and delete any of them.
-Deleting an agent erases what Bell learned for it. Rabel's notice says it in full:
+or number. Some of it is your callers' own words, which can be a name or a number. You can list those at any time and
+delete any of them. The rest is in a form that nobody but Rabel can match back to words. Deleting an agent erases what
+Bell learned for it. Rabel's notice says it in full:
 [rabellabs.com/api-privacy](https://rabellabs.com/api-privacy).
 
 This is a community integration, built and maintained by Rabel Labs, which runs Bell. Rabel Labs is not affiliated with,
