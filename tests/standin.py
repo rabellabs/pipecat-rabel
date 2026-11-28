@@ -59,6 +59,8 @@ class StandIn:
         mute: After ``ready``, read every message and send nothing more: no guess, no ``end_of_turn``.
         stall_after_heard: Stop reading and answering, without closing, after this many ``heard`` messages: the API
             stalled mid-call.
+        close_after_ready: Close the conversation (code 1011) this many seconds after ``ready``: an API that accepts and
+            then drops the line.
     """
 
     guesses: dict[str, str] = field(default_factory=dict)
@@ -78,6 +80,7 @@ class StandIn:
     refuse_report: bool = False
     ready_extra: dict = field(default_factory=dict)
     stall_after_heard: int | None = None
+    close_after_ready: float | None = None
     mute: bool = False
 
     connections: int = 0
@@ -127,6 +130,10 @@ class StandIn:
                      "min_chance": hello.get("min_chance", None if v == 3 else 0.7), "hold_line": self.hold_line,
                      "learning": hello.get("learn", True), "calls_heard": 143}
             await ws.send(json.dumps({**ready, **self.ready_extra}))
+            if self.close_after_ready is not None:
+                await asyncio.sleep(self.close_after_ready)
+                await ws.close(1011)
+                return
         turn, guess_id, heard_count, turns, guessed, sent = 1, 0, 0, 0, None, 0
         async for raw in ws:
             m = json.loads(raw)

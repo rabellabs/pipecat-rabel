@@ -453,6 +453,17 @@ async def test_api_closes_mid_call_and_is_reopened(warnings):
         assert api.connections == 2  # reopened after the 1 s back-off
 
 
+async def test_an_api_that_closes_right_after_ready_is_reopened_on_the_growing_waits(warnings):
+    # ready, then the line drops at once (a worker that accepts and dies). The back-off starts again only after a
+    # conversation that stayed up, so it is reopened 1, 2, 4 s later and so on, not every second for the whole call.
+    async with StandIn(close_after_ready=0.05) as api:
+        s = bell(api.url)
+        await run(s, [SleepFrame(4.5)])
+    assert api.connections <= 3, api.connections  # at 0, 1 and 3 s; every second would be 5
+    assert s.bell.stats.failures.get("closed", 0) >= 2
+    assert len(warnings) == 1, warnings
+
+
 async def test_a_connection_that_goes_silent_after_ready_is_noticed_and_reopened(warnings, monkeypatch):
     # The socket stays open but nothing comes back, not even an answer to a ping (a half-open socket). The strategy
     # pings, counts the connection dead, and opens another; the next turn's guess is started as usual. With the

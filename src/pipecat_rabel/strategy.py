@@ -74,6 +74,9 @@ _RETRY_STATUSES = {408, 429, 503, 529}
 _BACKOFF = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 # A conversation that stayed open this long and then closed cleanly (the API closes one after an hour) is reopened at once.
 _LONG_CONVERSATION_S = 60.0
+# The back-off starts again only after a conversation that stayed up this long after its ready, so an API that sends
+# ready and then closes is reopened on the growing waits, not every second.
+_STEADY_S = 30.0
 # Bell sends nothing while it has no guess, so a quiet line is normal. The connection is pinged every _PING_INTERVAL_S;
 # when no pong comes back within _LIVENESS_TIMEOUT_S the connection counts as dead (a half-open socket), it is closed,
 # and the conversation is reopened on the back-off, as the LiveKit hookup does. The Rabel API answers pings in its
@@ -582,9 +585,6 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
         """The transcript committed since Bell's reply started, as Pipecat's eager strategy joins it."""
         return concatenate_aggregated_text(self._bell_parts)
 
-    def _same(self, a: str | None, b: str | None) -> bool:
-        """Whether two transcripts are the same words, as the match policy compares them."""
-        return bool(a) and bool(b) and self.match_policy.matches(a, b)
     def _interchangeable(self, a: str | None, b: str | None) -> bool:
         """Whether the match policy is sure to judge every final the same way against ``a`` as against ``b``, so a reply
         on one may stand in for a reply on the other. True when the two are the same string, and for Pipecat's own
@@ -600,6 +600,9 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
             return policy.matches(a, b)
         return False
 
+    def _same(self, a: str | None, b: str | None) -> bool:
+        """Whether two transcripts are the same words, as the match policy compares them."""
+        return bool(a) and bool(b) and self.match_policy.matches(a, b)
 
     # ------------------------------------------------------------------ Bell's turn
 
@@ -898,7 +901,6 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
                 self._failure("down", f"could not reach the Rabel API ({type(e).__name__}); going on without Bell")
                 delay = _backoff(attempt)
             else:
-                attempt = 0
                 self.stats.conversations += 1
                 self._conv = conv
                 self.ready.set()
@@ -911,6 +913,8 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
                     self.ready.clear()
                 if self._stopped:
                     return
+                if time.monotonic() - conv.opened_at >= _STEADY_S:
+                    attempt = 0
                 if conv.refusal is not None:
                     delay = self._on_refusal(conv.refusal, attempt)
                 else:
