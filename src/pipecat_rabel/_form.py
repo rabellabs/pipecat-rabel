@@ -15,8 +15,8 @@ words never matched a final with such a word or in such a script, and its early 
 The guess is therefore written from the speech-to-text's own text of the words heard, as it showed them, followed by the
 words Bell adds, each as the speech-to-text last wrote it in a final transcript of this call. A word the call has not
 shown in a final stays as Bell sent it. A word goes after a space between two words of spaced scripts, with none between
-two of a script written without spaces, and where the two meet as the call's finals write it (none before any final has
-shown a meeting). Nothing about a language is assumed: the call's own transcripts are copied.
+two of a script written without spaces, and where the two meet as the call's finals write it (a space before any final
+has shown a meeting). Nothing about a language is assumed: the call's own transcripts are copied.
 """
 
 import re
@@ -96,9 +96,10 @@ class CallForm:
 
     @property
     def spaces_scripts(self) -> bool:
-        """A space where a script without spaces meets a spaced one, as most of this call's finals have written it;
-        none before any final has shown one."""
-        return self._script_gap > 0
+        """A space where a script without spaces meets a spaced one, unless more of this call's finals have written
+        none there than one. With no final showing a meeting, a space: an English turn that adds a name in such a
+        script (王) keeps the spaces around it."""
+        return self._script_gap >= 0
 
     def word(self, w: str) -> str:
         """The word as the call last wrote it, else as Bell sent it."""

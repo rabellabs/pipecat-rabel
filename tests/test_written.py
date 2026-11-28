@@ -71,8 +71,11 @@ def test_no_space_is_added_in_a_script_written_without_spaces():
     form = CallForm()
     assert words_of(JA_FINAL) == tuple(JA_GUESS.split())
     assert written(JA_HEARD, tuple("リセットしたい"), form) == "パスワードをリセットしたい"
-    # a word in a script with spaces beside one without: no space on either side of the unspaced script
-    assert written("暗証番号を", ("pin", "に", "変", "更"), form) == "暗証番号をpinに変更"
+    # a word in a script with spaces beside one without: a space where they meet until the call's finals write none there
+    assert written("暗証番号を", ("pin", "に", "変", "更"), form) == "暗証番号を pin に変更"
+    unspaced = CallForm()
+    unspaced.final("新しいpinに変更したい。")
+    assert written("暗証番号を", ("pin", "に", "変", "更"), unspaced) == "暗証番号をpinに変更"
     assert written("my", ("pin", "is"), form) == "my pin is"
     assert written("รหัส", tuple("ผ่าน"), form) == "รหัสผ่าน"
 
@@ -108,8 +111,8 @@ async def test_finals_that_carry_their_own_spaces_are_joined_as_pipecat_joins_th
 # ------------------------------------------------------------------------------- where two scripts meet
 
 def test_the_space_where_two_scripts_meet_is_written_as_the_calls_finals_write_it():
-    # before any final has shown a meeting of the two scripts: no space, as before
-    assert written("我想用", ("chatgpt",), CallForm()) == "我想用chatgpt"
+    # before any final has shown a meeting of the two scripts: a space there, as between two spaced words
+    assert written("我想用", ("chatgpt",), CallForm()) == "我想用 chatgpt"
     spaced, unspaced = CallForm(), CallForm()
     spaced.final("我想用 chatgpt 写。")
     unspaced.final("我想用chatgpt写。")
@@ -138,3 +141,24 @@ async def test_a_right_guess_where_a_chinese_turn_meets_a_latin_word_is_kept():
     assert got[-1] == (True, "我想试试 gemini")
     assert not any(isinstance(f, UserTurnResponseCancelFrame) for f in down)
     assert [e["guess"] for e in ends(api)] == ["none", "kept"]
+
+
+def test_a_name_in_a_script_without_spaces_inside_an_english_turn_keeps_its_spaces():
+    # The words of a script without spaces join each other without one; where they meet English words, a space, unless
+    # the call's finals write none there.
+    form = CallForm()
+    assert written("I'd like to speak to", ("王", "please"), form) == "I'd like to speak to 王 please"
+    assert written("I'd like to speak to", ("王", "小", "明", "please"), form) == "I'd like to speak to 王小明 please"
+    form.final("I'd like to speak to Mr 李 today.")
+    assert written("I'd like to speak to", ("王", "please"), form) == "I'd like to speak to 王 please"
+
+
+async def test_a_right_guess_with_a_chinese_name_in_an_english_turn_is_kept():
+    frames = [SleepFrame(0.3), start(), interim("I'd like to speak to"), SleepFrame(0.2), final("I'd like to speak to 王, please."),
+              stop(), SleepFrame(0.1)]
+    async with StandIn(guesses={"I'd like to speak to": "id like to speak to 王 please"}) as api:
+        s = bell(api.url)
+        down, _, _ = await run(s, frames)
+    assert replies(down) == [(True, "I'd like to speak to 王 please")]
+    assert not any(isinstance(f, UserTurnResponseCancelFrame) for f in down)
+    assert ends(api)[0]["guess"] == "kept"
