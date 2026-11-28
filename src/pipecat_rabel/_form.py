@@ -6,14 +6,16 @@
 
 """A guess written as this call's speech-to-text writes its words.
 
-Bell's guesses come in the API's words: case-folded, with punctuation dropped, and a mark inside a word dropped too
-("e-mail" is "email", "3.5" is "35"). Pipecat's match policy (``NormalizedMatch`` by default) folds case and punctuation
-the same way, but it splits a word at a mark inside it ("e-mail" is "e mail"). So a guess in the API's words never
-matched a final with such a word, and its early reply was always withdrawn.
+Bell's guesses come in the API's words: case-folded, with punctuation dropped, a mark inside a word dropped too
+("e-mail" is "email", "3.5" is "35"), and in a script written without spaces (kana, ideographs, Thai) one character at a
+time with a space between each. Pipecat's match policy (``NormalizedMatch`` by default) folds case and punctuation the
+same way, but it splits a word at a mark inside it ("e-mail" is "e mail") and keeps the spaces. So a guess in the API's
+words never matched a final with such a word or in such a script, and its early reply was always withdrawn.
 
 The guess is therefore written from the speech-to-text's own text of the words heard, as it showed them, followed by the
 words Bell adds, each as the speech-to-text last wrote it in a final transcript of this call. A word the call has not
-shown in a final stays as Bell sent it. Nothing about a language is assumed: the call's own transcripts are copied.
+shown in a final stays as Bell sent it. A word goes after a space unless the text before it or the word itself is in a
+script written without spaces. Nothing about a language is assumed: the call's own transcripts are copied.
 """
 
 import re
@@ -82,8 +84,18 @@ class CallForm:
         return self._surface.get(w, w)
 
 
+def _unspaced(c: str) -> bool:
+    """A character of a script written without spaces between words."""
+    return bool(_UNSPACED.match(c))
+
+
 def written(shown: str, added: tuple[str, ...], form: CallForm) -> str:
     """The guess: ``shown`` (the speech-to-text's text of the words heard, as it showed them), then the words Bell
-    adds after them, each as this call's finals have written it."""
-    toks = shown.split() + [form.word(w) for w in added]
-    return " ".join(toks)
+    adds after them, each as this call's finals have written it, after a space unless the text before it or the word
+    is in a script written without spaces."""
+    out = shown.strip()
+    for w in (form.word(w) for w in added):
+        if out and not (_unspaced(out[-1]) or _unspaced(w[:1])):
+            out += " "
+        out += w
+    return out

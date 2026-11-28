@@ -43,6 +43,7 @@ from pipecat.processors.frame_processor import FrameProcessorSetup
 from pipecat.turns.types import UserTurnSpeculation
 from pipecat.turns.user_stop import EagerMatchPolicy, EagerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
+from pipecat.utils.string import TextPartForConcatenation, concatenate_aggregated_text
 from websockets.exceptions import InvalidStatus
 
 from pipecat_rabel import __version__
@@ -290,7 +291,9 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
         self._bell: UserTurnSpeculation | None = None  # Bell's early reply, while it is the one under way
         self._bell_at: float | None = None  # when it was started (the report's head start)
         self._bell_timer: asyncio.Task | None = None
-        self._bell_parts: list[str] = []  # transcripts committed since it was started, which it is checked against
+        # transcripts committed since it was started, which it is checked against, joined as Pipecat's eager strategy
+        # joins them (no space added where the speech-to-text says its text carries its own)
+        self._bell_parts: list[TextPartForConcatenation] = []
         self._bell_confirmed: UserTurnSpeculation | None = None  # the one this turn's end kept
         self._withdrawing_for_eager = False  # while Bell's reply is withdrawn for the speech-to-text's early reply
 
@@ -400,7 +403,11 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
                 self._live_text = None
         elif isinstance(frame, TranscriptionFrame) and frame.text:
             # Committed before Pipecat's strategy sees it, which may end the turn on it.
-            self._bell_parts.append(frame.text)
+            self._bell_parts.append(
+                TextPartForConcatenation(
+                    frame.text, includes_inter_part_spaces=getattr(frame, "includes_inter_frame_spaces", False)
+                )
+            )
             try:
                 await self._on_final(frame)
             except Exception as e:  # noqa: BLE001 - Bell must never stop the turn
@@ -464,7 +471,7 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
             )
             return
 
-        if self.match_policy.matches(bell.text, " ".join(self._bell_parts)):
+        if self.match_policy.matches(bell.text, self._committed()):
             self._bell_confirmed = bell
             # The reply already runs on Bell's guess. The turn's end releases it, and the flag stops a second inference
             # answering the same turn.
@@ -560,6 +567,10 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
                 await self.cancel_task(task)
         return speculation
 
+    def _committed(self) -> str:
+        """The transcript committed since Bell's reply started, as Pipecat's eager strategy joins it."""
+        return concatenate_aggregated_text(self._bell_parts)
+
     def _same(self, a: str | None, b: str | None) -> bool:
         """Whether two transcripts are the same words, as the match policy compares them."""
         return bool(a) and bool(b) and self.match_policy.matches(a, b)
@@ -619,7 +630,7 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
             return "none", None
         if self._pushed_guess is None:
             return ("dropped" if self._unused else "none"), None
-        if self._bell is not None and self.match_policy.matches(self._bell.text, " ".join(self._bell_parts)):
+        if self._bell is not None and self.match_policy.matches(self._bell.text, self._committed()):
             return "kept", None if self._bell_at is None else _ms(final_at - self._bell_at)
         return "dropped", None
 
