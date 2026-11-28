@@ -169,8 +169,9 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
       Pipecat's ``UserTurnProcessor`` ends the turn itself, Pipecat releases the held reply before the check, and the
       caller can hear both the reply to the guess and the reply to the final words.
 
-    One early reply runs at a time. A newer guess withdraws the reply under way before it starts its own. The
-    speech-to-text's early end of turn on the words of Bell's reply under way is not started (it would replace that reply
+    One early reply runs at a time. A newer guess withdraws Bell's reply under way before it starts its own. A guess that
+    comes while the speech-to-text's own early reply is under way does not withdraw it: it waits, and starts if the
+    words reach it. The speech-to-text's early end of turn on the words of Bell's reply under way is not started (it would replace that reply
     with an identical one started later; counted in ``stats.eager_held_back``); one on other words withdraws Bell's
     reply, then starts. When a VAD hears the caller go on after a pause, Pipecat voids the reply under way, and Bell's
     no longer counts as running.
@@ -753,8 +754,11 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
         text = self._written(text, heard)
         self._guesses.append(text)
         self._unused.append(text)
-        # An early reply under way on the words heard so far stays; otherwise the newest guess replaces it.
-        if self._live_text is not None and self._same(self._live_text, self._heard):
+        # An early reply under way on the words heard so far stays. So does the speech-to-text's own early reply, on any
+        # words: the guess may have been made before it started, and if the turn ends on its words, withdrawing it would
+        # leave no early reply and start the reply later than without Bell. The guess waits; it starts if the words
+        # reach it (_on_heard). Otherwise the newest guess replaces Bell's reply under way.
+        if self._live_text is not None and (self._bell is None or self._same(self._live_text, self._heard)):
             return
         await self._start_bell(text, chance)
 

@@ -292,3 +292,16 @@ async def test_p6_bells_bet_that_the_turn_ends_on_the_words_heard_is_kept_and_no
     st = with_bell.strategies.bell.stats
     assert st.guesses_pushed == 1 and st.eager_held_back == 1
     assert not faults, "; ".join(faults) + f". With Bell: {with_bell.describe()}. Alone: {alone.describe()}"
+
+
+async def test_p7_a_guess_that_arrives_after_flux_eager_reply_on_other_words_does_not_replace_it():
+    # Bell's guess on earlier words reaches the strategy only after Flux's eager end of turn on other words has started
+    # (the network, or a busy machine). Replacing Flux's reply with one on the older guess would leave the turn, which
+    # ends on Flux's words, with no early reply: the reply would start at the turn's end, later than without Bell.
+    final_words = "I need to check my card."
+    frames = [SleepFrame(0.3), start(), interim(P3_H2), SleepFrame(0.05), eager("i need to check my card"),
+              SleepFrame(0.3), final(final_words), stop(), SleepFrame(2.0)]
+    with_bell, alone = await bell_and_alone({P3_H2: P3_G2}, frames, guess_delay=0.15)
+    faults = no_wrong_guess_heard(with_bell, P3_G2) + not_later(with_bell, alone, final_words)
+    assert with_bell.strategies.bell.stats.guesses_received == 1
+    assert not faults, "; ".join(faults) + f". With Bell: {with_bell.describe()}. Alone: {alone.describe()}"
