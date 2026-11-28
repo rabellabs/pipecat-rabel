@@ -40,7 +40,7 @@ from pipecat.processors.aggregators.llm_response_universal import LLMUserAggrega
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.llm_service import LLMService
 from pipecat.tests.utils import SleepFrame, run_test
-from pipecat.turns.user_stop import NormalizedMatch
+from pipecat.turns.user_stop import EagerMatchPolicy, NormalizedMatch
 from pipecat.turns.user_turn_strategies import EagerUserTurnStrategies
 
 from .common import FINAL, GUESS, H1, H2, bell, eager, final, interim, start, stop
@@ -114,9 +114,10 @@ class Run:
     def turn_end(self) -> float:
         return next(t for t, f in self.seen if isinstance(f, UserStoppedSpeakingFrame))
 
-    def first_reply_to(self, words: str) -> float | None:
-        """Seconds from the turn's end to the first text frame past the gate of a reply to these words."""
-        t = next((t for t, _, w in self.heard() if _MATCH.matches(w, words)), None)
+    def first_reply_to(self, words: str, policy=_MATCH) -> float | None:
+        """Seconds from the turn's end to the first text frame past the gate of a reply to these words (by the match
+        policy the run used)."""
+        t = next((t for t, _, w in self.heard() if policy.matches(w, words)), None)
         return None if t is None else t - self.turn_end()
 
     def describe(self) -> str:
@@ -240,8 +241,8 @@ def no_wrong_guess_heard(with_bell: Run, *wrong: str) -> list[str]:
             if any(_MATCH.matches(words, w) for _, _, words in with_bell.heard())]
 
 
-def not_later(with_bell: Run, alone: Run, final_words: str) -> list[str]:
-    late_bell, late_alone = with_bell.first_reply_to(final_words), alone.first_reply_to(final_words)
+def not_later(with_bell: Run, alone: Run, final_words: str, policy=_MATCH) -> list[str]:
+    late_bell, late_alone = with_bell.first_reply_to(final_words, policy), alone.first_reply_to(final_words, policy)
     if late_bell is None or late_alone is None or late_bell > late_alone + TOLERANCE:
         return [f"the reply to the real words started {late_bell} s after the turn's end with Bell, {late_alone} s with "
                 f"Pipecat's eager strategy alone (tolerance {TOLERANCE} s)"]
@@ -304,4 +305,31 @@ async def test_p7_a_guess_that_arrives_after_flux_eager_reply_on_other_words_doe
     with_bell, alone = await bell_and_alone({P3_H2: P3_G2}, frames, guess_delay=0.15)
     faults = no_wrong_guess_heard(with_bell, P3_G2) + not_later(with_bell, alone, final_words)
     assert with_bell.strategies.bell.stats.guesses_received == 1
+    assert not faults, "; ".join(faults) + f". With Bell: {with_bell.describe()}. Alone: {alone.describe()}"
+
+
+
+class OneWordOff(EagerMatchPolicy):
+    """A developer's own match policy that keeps a reply when at most one word differs. It is not transitive: two
+    transcripts can each match a third and not each other."""
+
+    def matches(self, eager: str, final: str) -> bool:
+        a = NormalizedMatch._normalize(eager).split()
+        b = NormalizedMatch._normalize(final).split()
+        return len(a) == len(b) and sum(x != y for x, y in zip(a, b)) <= 1
+
+
+async def test_p8_with_a_policy_that_is_not_transitive_flux_eager_reply_is_not_held_back_for_bells():
+    # Bell's guess and Flux's eager end of turn match by the policy, one word apart; the final matches Flux's words and
+    # not Bell's. Holding Flux's early reply back for Bell's would leave the turn with no reply the final keeps, and the
+    # reply would start at the turn's end, later than without Bell.
+    policy = OneWordOff()
+    final_words = "i want to pay the bills"
+    frames = [SleepFrame(0.3), start(), interim("i want to pay my"), SleepFrame(0.1), eager("i want to pay my bills"),
+              SleepFrame(0.3), final(final_words), stop(), SleepFrame(2.0)]
+    async with StandIn(guesses={"i want to pay my": "i want to pay my bill"}) as api:
+        with_bell = await through_llm(bell(api.url, match_policy=policy), frames)
+    alone = await through_llm(EagerUserTurnStrategies(match_policy=policy), frames)
+    faults = not_later(with_bell, alone, final_words, policy)
+    assert with_bell.strategies.bell.stats.guesses_pushed == 1
     assert not faults, "; ".join(faults) + f". With Bell: {with_bell.describe()}. Alone: {alone.describe()}"

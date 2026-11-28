@@ -41,7 +41,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameProcessorSetup
 from pipecat.turns.types import UserTurnSpeculation
-from pipecat.turns.user_stop import EagerMatchPolicy, EagerUserTurnStopStrategy
+from pipecat.turns.user_stop import EagerMatchPolicy, EagerUserTurnStopStrategy, ExactMatch, NormalizedMatch
 from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
 from pipecat.utils.string import TextPartForConcatenation, concatenate_aggregated_text
 from websockets.exceptions import InvalidStatus
@@ -518,7 +518,7 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
         Args:
             speculation: The speech-to-text's early end of turn.
         """
-        if self._bell is not None and self._same(self._live_text, speculation.text):
+        if self._bell is not None and self._interchangeable(self._live_text, speculation.text):
             # Starting it would replace the reply under way on Bell's guess with an identical one started later.
             self.stats.eager_held_back += 1
             logger.debug(f"{self}: the speech-to-text's early end of turn has the words of Bell's, under way; not started")
@@ -585,6 +585,21 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
     def _same(self, a: str | None, b: str | None) -> bool:
         """Whether two transcripts are the same words, as the match policy compares them."""
         return bool(a) and bool(b) and self.match_policy.matches(a, b)
+    def _interchangeable(self, a: str | None, b: str | None) -> bool:
+        """Whether the match policy is sure to judge every final the same way against ``a`` as against ``b``, so a reply
+        on one may stand in for a reply on the other. True when the two are the same string, and for Pipecat's own
+        policies when they match: each compares one form of the words, so matching is transitive. A developer's own
+        policy need not be transitive (two transcripts can each match a third and not each other), so for it only the
+        same string counts."""
+        if not a or not b:
+            return False
+        if a == b:
+            return True
+        policy = self.match_policy
+        if type(policy).matches in (NormalizedMatch.matches, ExactMatch.matches):
+            return policy.matches(a, b)
+        return False
+
 
     # ------------------------------------------------------------------ Bell's turn
 
