@@ -74,6 +74,15 @@ _RETRY_STATUSES = {408, 429, 503, 529}
 _BACKOFF = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 # A conversation that stayed open this long and then closed cleanly (the API closes one after an hour) is reopened at once.
 _LONG_CONVERSATION_S = 60.0
+# Bell sends nothing while it has no guess, so a quiet line is normal. The connection is pinged every _PING_INTERVAL_S;
+# when no pong comes back within _LIVENESS_TIMEOUT_S the connection counts as dead (a half-open socket), it is closed,
+# and the conversation is reopened on the back-off, as the LiveKit hookup does. The Rabel API answers pings in its
+# WebSocket server, not in the conversation's code, so a healthy quiet call always answers in time.
+_PING_INTERVAL_S = 5.0
+_LIVENESS_TIMEOUT_S = 15.0
+# How long a close waits for the other side's answer before the socket is dropped (the library's default is 10 s; a dead
+# socket never answers).
+_CLOSE_TIMEOUT_S = 1.0
 
 
 def _pipecat_version() -> str:
@@ -167,7 +176,7 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
     no longer counts as running.
 
     Failing open: the connection to the API is opened in the background when the pipeline is set up, and nothing waits
-    for it. Until the API answers ``ready``, while it is down, when it refuses, when it closes the conversation mid-call,
+    for it. A connection that goes silent after ``ready`` (no answer to a ping within 15 seconds) is closed and reopened. Until the API answers ``ready``, while it is down, when it refuses, when it closes the conversation mid-call,
     and when it sends a message this strategy cannot read, Bell starts no early reply and the turn ends exactly as
     Pipecat's eager strategy ends it. Each kind of failure is logged once a call at WARNING, and again only at DEBUG.
 
@@ -909,6 +918,9 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
                 self._url,
                 additional_headers={"Authorization": f"Bearer {self._api_key}"},
                 open_timeout=None,
+                ping_interval=_PING_INTERVAL_S,
+                ping_timeout=_LIVENESS_TIMEOUT_S,
+                close_timeout=_CLOSE_TIMEOUT_S,
                 max_size=2**20,
                 user_agent_header=f"pipecat-rabel/{__version__}",
             )

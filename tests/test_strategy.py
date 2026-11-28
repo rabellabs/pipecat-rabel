@@ -46,7 +46,7 @@ from .common import (
     start,
     stop,
 )
-from .standin import BlackHole, StandIn, unused_url
+from .standin import BlackHole, SilentProxy, StandIn, unused_url
 
 
 @pytest.fixture
@@ -451,6 +451,30 @@ async def test_api_closes_mid_call_and_is_reopened(warnings):
     async with StandIn(close_after_heard=1, guesses={H2: GUESS}) as api:
         await assert_fails_open(bell(api.url), one_turn(), warnings, "closed", wait_after=1.2)
         assert api.connections == 2  # reopened after the 1 s back-off
+
+
+async def test_a_connection_that_goes_silent_after_ready_is_noticed_and_reopened(warnings, monkeypatch):
+    # The socket stays open but nothing comes back, not even an answer to a ping (a half-open socket). The strategy
+    # pings, counts the connection dead, and opens another; the next turn's guess is started as usual. With the
+    # library's own timing (a ping every 20 s, 20 s to answer) the dead line would hold the words for 40 s.
+    monkeypatch.setattr(bell_module, "_PING_INTERVAL_S", 0.2)
+    monkeypatch.setattr(bell_module, "_LIVENESS_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(bell_module, "_CLOSE_TIMEOUT_S", 0.2)
+    async with StandIn(guesses={H2: GUESS}) as api, SilentProxy(api.url) as proxy:
+        s = bell(proxy.url)
+        readies = []
+
+        @s.bell.event_handler("on_ready")
+        async def on_ready(strategy, ready):
+            readies.append(ready)
+            if len(readies) == 1:
+                proxy.silence()
+
+        down, _, _ = await run(s, [SleepFrame(0.3), SleepFrame(2.2)] + one_turn())
+    assert proxy.connections == 2 and len(readies) == 2
+    assert s.bell.stats.conversations == 2 and "closed" in s.bell.stats.failures
+    assert len(warnings) == 1, warnings
+    assert replies(down) == [(True, GUESS)]
 
 
 @pytest.mark.parametrize(

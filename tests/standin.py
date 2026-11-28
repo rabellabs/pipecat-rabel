@@ -208,6 +208,52 @@ class BlackHole:
         self._server.close()
 
 
+class SilentProxy:
+    """A TCP proxy in front of a stand-in that can go silent: after :meth:`silence`, the connections open through it pass
+    nothing either way and stay open, as a half-open socket does. Connections opened after it pass as before."""
+
+    def __init__(self, target_url: str):
+        self._port = int(target_url.split(":")[2].split("/")[0])
+        self._conns: list[dict] = []
+        self._writers: list[asyncio.StreamWriter] = []
+        self.connections = 0
+
+    async def __aenter__(self) -> "SilentProxy":
+        self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+        port = self._server.sockets[0].getsockname()[1]
+        self.url = f"ws://127.0.0.1:{port}/v1/conversation"
+        return self
+
+    def silence(self):
+        for conn in self._conns:
+            conn["silent"] = True
+
+    async def _handle(self, reader, writer):
+        self.connections += 1
+        conn = {"silent": False}
+        self._conns.append(conn)
+        up_reader, up_writer = await asyncio.open_connection("127.0.0.1", self._port)
+        self._writers += [writer, up_writer]
+
+        async def pipe(r, w):
+            try:
+                while data := await r.read(65536):
+                    if not conn["silent"]:
+                        w.write(data)
+                        await w.drain()
+            except Exception:  # noqa: BLE001 - either side closed
+                pass
+            finally:
+                w.close()
+
+        await asyncio.gather(pipe(reader, up_writer), pipe(up_reader, writer))
+
+    async def __aexit__(self, *exc):
+        for w in self._writers:
+            w.close()
+        self._server.close()
+
+
 def unused_url() -> str:
     """An address nothing listens on: the API down."""
     s = socket.socket()
