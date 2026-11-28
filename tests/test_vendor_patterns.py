@@ -74,7 +74,8 @@ async def test_part_words_pass_and_bells_guess_stays():
                   interim("I lost my wal"), interim("I lost my wallet"), SleepFrame(0.05), final("I lost my wallet."),
                   stop(), SleepFrame(0.1)]
         down, _, context = await run(s, frames)
-    assert replies(down) == [(True, guess)]
+    # the guess as the service shows the words heard: "I lost", then Bell's words
+    assert replies(down) == [(True, "I lost my wallet")]
     assert context.messages == [{"role": "user", "content": "I lost my wallet."}]
     assert [m["text"] for m in api.received[0] if m["type"] == "heard"] == [
         "I lost", "I lost my", "I lost my wal", "I lost my wallet"]
@@ -99,7 +100,8 @@ async def test_last_words_burst_reaches_bells_guess_before_it_arrives():
         s = bell(api.url)
         frames = last_words_burst() + [SleepFrame(0.2), final("I'd like to close my account."), stop(), SleepFrame(0.1)]
         down, _, _ = await run(s, frames)
-    assert replies(down) == [(True, "i'd like to close my account")]
+    # the words shown had reached the guess: it is written as the service showed them
+    assert replies(down) == [(True, "I'd like to close my account.")]
     assert s.bell.stats.guesses_pushed == 1 and s.bell.stats.guesses_right == 1
 
 
@@ -130,6 +132,6 @@ async def test_the_turn_resuming_withdraws_bells_reply():
                   UserTurnResponseCancelFrame(), eager("Can you tell me my balance?"), SleepFrame(0.05),
                   final("Can you tell me my balance?"), stop(), SleepFrame(0.1)]
         down, _, context = await run(s, frames)
-    assert replies(down) == [(True, guess), (True, "Can you tell me my balance?")]
+    assert replies(down) == [(True, "Can you tell me my balance"), (True, "Can you tell me my balance?")]
     assert context.messages == [{"role": "user", "content": "Can you tell me my balance?"}]
     assert s.bell.stats.eager_held_back == 1 and s.bell.stats.guesses_pushed == 1

@@ -46,6 +46,7 @@ from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
 from websockets.exceptions import InvalidStatus
 
 from pipecat_rabel import __version__
+from pipecat_rabel._form import CallForm, words_of, written
 
 RABEL_API_URL = "wss://api.rabellabs.com/v1/conversation"
 """The address of Bell's conversation endpoint."""
@@ -145,7 +146,9 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
 
     - The words: each :class:`~pipecat.frames.frames.InterimTranscriptionFrame` with words is sent to Bell as ``heard``,
       each :class:`~pipecat.frames.frames.TranscriptionFrame` with words as ``end_of_turn``.
-    - Bell's guess at the whole turn: an early reply is started on it with ``start_user_turn_speculation()``, the call
+    - Bell's guess at the whole turn, written as the speech-to-text writes the call's words: the words heard as it
+      showed them, then each word Bell adds as it last wrote that word in this call. An early reply is started on it
+      with ``start_user_turn_speculation()``, the call
       Pipecat's docs give a stop strategy for answering ahead of the turn ending. Pipecat holds the reply until the turn
       is confirmed and never writes the guess to the conversation.
     - The turn's end: the reply is kept when the transcript committed since the guess matches it by the match policy
@@ -278,6 +281,7 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
         self._guesses: list[str] = []
         self._unused: list[str] = []  # guesses taken in this turn and not yet started, counted dropped if never started
         self._pushed_guess: str | None = None  # the guess started last in this turn
+        self._form = CallForm()  # how this call's speech-to-text writes its words, for writing a guess the same way
         self._started: list[str] = []  # the guesses started in this turn, each once, the last started last
 
         # Pipecat's turn and its one early reply.
@@ -577,6 +581,10 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
 
     async def _on_final(self, frame: TranscriptionFrame):
         final_at = time.monotonic()
+        try:
+            self._form.final(frame.text)
+        except Exception:  # noqa: BLE001 - the form is only for writing guesses
+            pass
         conv, guess = self._turn_conv, self._pushed_guess
         report, head_start_ms = self._report_of(frame.text, final_at)
         # The new Bell can send more than one guess a turn. The report is on the guess started last. Each guess started
@@ -717,12 +725,25 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
                 )
                 return
 
+        text = self._written(text, heard)
         self._guesses.append(text)
         self._unused.append(text)
         # An early reply under way on the words heard so far stays; otherwise the newest guess replaces it.
         if self._live_text is not None and self._same(self._live_text, self._heard):
             return
         await self._start_bell(text, chance)
+
+    def _written(self, text: str, heard: str | None) -> str:
+        """Bell's guess written as this call's speech-to-text writes its words (see ``_form``): the words heard as the
+        speech-to-text showed them (the newest, else the ones the guess was made at), then the words Bell adds."""
+        g = words_of(text)
+        if not g:
+            return text
+        for shown in (self._heard, heard):
+            h = words_of(shown) if shown else ()
+            if h and g[: len(h)] == h:
+                return written(shown, g[len(h) :], self._form) or text
+        return written("", g, self._form) or text
 
     # ------------------------------------------------------------- connection
 
