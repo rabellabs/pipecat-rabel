@@ -7,8 +7,8 @@
 """Bell, as a Pipecat user turn stop strategy: an early reply started on Bell's guess at the caller's words.
 
 The strategy sits in the user aggregator's turn strategies, where Pipecat's own eager end of turn sits. It reads the words
-as the speech-to-text sends them, sends them to Rabel's API (version 2 of its contract), and when Bell guesses the rest of
-the turn it starts Pipecat's early reply on the guess with ``start_user_turn_speculation()``. At the turn's end it keeps
+as the speech-to-text sends them, sends them to Rabel's API (version 3 of its contract: the new Bell), and when Bell guesses
+the rest of the turn it starts Pipecat's early reply on the guess with ``start_user_turn_speculation()``. At the turn's end it keeps
 that reply only when the committed transcript matches the guess, by the strategy's match policy (``NormalizedMatch`` by
 default), and withdraws it with ``cancel_user_turn_speculation()`` otherwise, so a wrong guess costs one model call and
 nothing the caller hears. It pushes no frame and changes none: the speech-to-text's frames reach the aggregator as they
@@ -51,7 +51,10 @@ RABEL_API_URL = "wss://api.rabellabs.com/v1/conversation"
 """The address of Bell's conversation endpoint."""
 
 DEFAULT_AGENT = "default"
-DEFAULT_MIN_CHANCE = 0.7
+DEFAULT_MIN_CHANCE = None  # the new Bell's balanced setting: the hello sends no min_chance
+# The bar a guess must reach when neither the developer nor the API's ready gives one and the API is not version 3, as in
+# 0.3.0. A version 3 API with no min_chance set serves its balanced setting, and no bar is added here.
+_V2_MIN_CHANCE = 0.7
 MIN_CHANCE_RANGE = (0.67, 0.99)  # the API's range; a value outside it is clamped here, as the API would bring it in
 
 _AGENT_NAME = re.compile(r"^[a-z0-9_-]{1,64}$")
@@ -96,6 +99,8 @@ class _Conversation:
 
     ws: Any
     opened_at: float
+    v: int | None = None  # the version its ready said: 3 for the new Bell, 2 for an API without it
+    min_chance: float | None = None  # the ready's min_chance in force; None for the new Bell's balanced setting
     hold_line: float | None = None
     hold_always: bool | None = None
     hold_updates: int | None = None
@@ -163,15 +168,17 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
 
     Event handlers available:
 
-    - on_ready(strategy, ready): the API answered the hello; ``ready`` is a dict with the API's ``hold_line`` and
-      ``calls_heard`` (how many of this agent's calls Bell has learned from).
+    - on_ready(strategy, ready): the API answered the hello; ``ready`` is a dict with the version the API answered
+      with (``v``: 3 for the new Bell), its ``hold_line`` and ``calls_heard`` (how many of this agent's calls Bell has
+      learned from).
     - on_guess(strategy, text, chance): an early reply was started on a guess. ``chance`` is None when an earlier guess
       is started again because the words heard have reached it.
     - on_turn_end(strategy, final, guess, right): a turn sent to Bell ended; ``guess`` is the guess started in that
       turn or None, ``right`` whether it equals the final words as the match policy compares them.
 
     The report: at each turn's end the strategy tells the API whether Bell's guess was kept or dropped, with the head
-    start of a kept one, so the agent's status can show them. Kept means Bell's early reply is still the one under way
+    start of a kept one, so the agent's status can show them. On a turn where the new Bell sent more than one guess and
+    more than one was started, the report is on the last one started, and ``dropped_before`` counts those before it. Kept means Bell's early reply is still the one under way
     when the final words arrive and the match policy finds the final words equal to it. One DEBUG line is logged for
     each kept guess, and one INFO line with the call's totals when it ends; neither carries a word of the call.
     """
@@ -181,7 +188,7 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
         *,
         api_key: str | None = None,
         agent: str = DEFAULT_AGENT,
-        min_chance: float = DEFAULT_MIN_CHANCE,
+        min_chance: float | None = DEFAULT_MIN_CHANCE,
         learn: bool = True,
         url: str | None = None,
         vendor: str | None = None,
@@ -200,7 +207,9 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
                 off and the strategy is Pipecat's eager strategy.
             agent: Your agent's name, which Bell learns for: lower-case letters, digits, ``-`` and ``_``, 1 to
                 64 characters. ``demo-bank`` is a demonstration agent every account can use.
-            min_chance: How sure Bell must be before it guesses, 0.67 to 0.99. Out of range is clamped.
+            min_chance: How sure Bell must be before it guesses, 0.67 to 0.99, or None (the default) for the new Bell's
+                balanced setting. Out of range is clamped. A value set here is sent in the hello, and every guess must
+                then be at least that sure: a higher value sends fewer guesses, fewer wrong ones and fewer right ones.
             learn: False means this call teaches Bell nothing.
             url: The conversation endpoint, or the API's base address. Defaults to the ``RABEL_API_URL`` environment
                 variable, and without it to Rabel's API.
@@ -239,7 +248,7 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
         if not isinstance(report, bool):
             raise ValueError(f"report must be True or False (got {report!r})")
         lo, hi = MIN_CHANCE_RANGE
-        if not lo <= min_chance <= hi:
+        if min_chance is not None and not lo <= min_chance <= hi:
             logger.warning(f"{self}: min_chance {min_chance} is outside {lo} to {hi}; clamped")
             min_chance = min(max(min_chance, lo), hi)
 
@@ -268,7 +277,8 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
         self._heard_at: dict[str, float] = {}  # words sent as heard -> when
         self._guesses: list[str] = []
         self._unused: list[str] = []  # guesses taken in this turn and not yet started, counted dropped if never started
-        self._pushed_guess: str | None = None  # the guess started in this turn
+        self._pushed_guess: str | None = None  # the guess started last in this turn
+        self._started: list[str] = []  # the guesses started in this turn, each once, the last started last
 
         # Pipecat's turn and its one early reply.
         self._pipecat_turn_open = False
@@ -297,9 +307,15 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
         return self._agent
 
     @property
-    def min_chance(self) -> float:
-        """How sure Bell must be before it guesses."""
+    def min_chance(self) -> float | None:
+        """How sure Bell must be before it guesses, as set; None for the new Bell's balanced setting."""
         return self._min_chance
+
+    @property
+    def v3(self) -> bool:
+        """Whether the open conversation serves the new Bell (its ``ready`` said ``"v": 3``). False before a ``ready``
+        and with an API that answered with a version 2 ``ready``."""
+        return self._conv is not None and self._conv.v == 3
 
     @property
     def hold_line(self) -> float | None:
@@ -311,7 +327,7 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
 
     @property
     def hold_always(self) -> bool | None:
-        """The API's ``hold_always`` from the open conversation's ``ready`` (true or false), or None.
+        """The API's ``hold_always`` from the open conversation's version 3 ``ready`` (true or false), or None.
 
         For an app to log what the API sent; this strategy does not apply it, like ``hold_line``.
         """
@@ -319,7 +335,7 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
 
     @property
     def hold_updates(self) -> int | None:
-        """The API's ``hold_updates`` from the open conversation's ``ready`` (1 or 2), or None.
+        """The API's ``hold_updates`` from the open conversation's version 3 ``ready`` (1 or 2), or None.
 
         For an app to log what the API sent; this strategy does not apply it, like ``hold_line``.
         """
@@ -513,6 +529,7 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
         self._bell_confirmed = None
         self._live_text = text
         self._pushed_guess = text
+        self._started = [g for g in self._started if g != text] + [text]
         self.stats.guesses_pushed += 1
         self._bell_timer = self.create_task(self._bell_timeout(speculation), "bell_speculation_timeout")
         logger.debug(f"{self}: starting an early reply on Bell's guess")
@@ -562,7 +579,10 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
         final_at = time.monotonic()
         conv, guess = self._turn_conv, self._pushed_guess
         report, head_start_ms = self._report_of(frame.text, final_at)
-        self._count(report, head_start_ms)
+        # The new Bell can send more than one guess a turn. The report is on the guess started last. Each guess started
+        # before it was withdrawn when a newer one started, and counts as dropped before it.
+        dropped_before = max(len(self._started) - 1, 0) if self._in_turn and report != "none" else 0
+        self._count(report, head_start_ms, dropped_before)
         self._drop_unused()
         if conv is not None:
             message: dict[str, Any] = {"type": "end_of_turn", "text": frame.text}
@@ -570,6 +590,8 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
                 message["guess"] = report
                 if report == "kept" and head_start_ms is not None:
                     message["head_start_ms"] = head_start_ms
+                if dropped_before > 0 and conv.v == 3:
+                    message["dropped_before"] = dropped_before
             self._send(conv, message)
             right = self._same(guess, frame.text)
             self.stats.guesses_right += int(right)
@@ -599,14 +621,15 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
             self.stats.guesses_dropped += len(self._unused)
         self._unused = []
 
-    def _count(self, report: str, head_start_ms: int | None):
+    def _count(self, report: str, head_start_ms: int | None, dropped_before: int = 0):
         """The call's totals for the summary, and the line for a kept guess (numbers only, no word of the call)."""
         s = self.summary
         s["turns"] += 1
         if report == "none":
             return
-        s["guesses"] += 1
+        s["guesses"] += 1 + dropped_before
         s[report] += 1
+        s["dropped"] += dropped_before
         if report == "kept":
             s["head_start_ms"] += head_start_ms or 0
             # in the form and at the level of Pipecat's own line for an early reply kept (EagerUserTurnStopStrategy:
@@ -639,6 +662,7 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
         self._guesses = []
         self._unused = []
         self._pushed_guess = None
+        self._started = []
         # A turn goes to Bell only if its first words do: a conversation opened mid-turn waits for the next turn.
         conv = self._conv
         self._turn_conv = conv if conv is not None and self.ready.is_set() else None
@@ -659,11 +683,18 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
             self.stats.guesses_dropped += 1
             self._failure("wrong_data", f"Bell sent a guess this strategy cannot read ({_short(m)}); not used")
             return
-        if chance is not None and chance < self._min_chance:
+        # The bar in force: the API's (its ready says the value it took), else the developer's. With an API that is not
+        # version 3 and none set, 0.3.0's 0.7. A version 3 API with none set serves its balanced setting: no bar here.
+        line = conv.min_chance if conv.min_chance is not None else self._min_chance
+        if line is None and conv.v != 3:
+            line = _V2_MIN_CHANCE
+        if chance is None and (conv.min_chance is not None or conv.v == 3):
             self.stats.guesses_dropped += 1
-            self._failure(
-                "wrong_data", f"Bell sent a guess at chance {chance}, under min_chance {self._min_chance}; not used"
-            )
+            self._failure("wrong_data", "Bell sent a guess with no chance; not used")
+            return
+        if chance is not None and line is not None and chance < line:
+            self.stats.guesses_dropped += 1
+            self._failure("wrong_data", f"Bell sent a guess at chance {chance}, under min_chance {line}; not used")
             return
         if not self._in_turn or self._turn_conv is not conv:
             self.stats.guesses_dropped += 1  # the turn it answers is over
@@ -760,16 +791,19 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
                 outbox.task_done()
 
     def _hello(self) -> dict:
-        hello = {
+        # "v": 3 takes the new Bell. An API without it reads the same hello as a version 2 hello and answers with a
+        # version 2 ready (min_chance 0.7 when the hello has none). The strategy then works as 0.3.0 did.
+        hello: dict[str, Any] = {
             "type": "hello",
-            "v": 2,
+            "v": 3,
             "agent": self._agent,
-            "min_chance": self._min_chance,
             "learn": self._learn,
             "host": "pipecat",
             "host_version": _pipecat_version(),
             "hookup": __version__,
         }
+        if self._min_chance is not None:
+            hello["min_chance"] = self._min_chance
         if self._vendor:
             hello["vendor"] = self._vendor
         if self._user is not None:
@@ -803,7 +837,9 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
                 self.stats.conversations += 1
                 self._conv = conv
                 self.ready.set()
-                await self._call_event_handler("on_ready", {"hold_line": conv.hold_line, "calls_heard": conv.calls_heard})
+                await self._call_event_handler(
+                    "on_ready", {"v": conv.v, "hold_line": conv.hold_line, "calls_heard": conv.calls_heard}
+                )
                 await self._receive(conv)
                 if self._conv is conv:
                     self._conv = None
@@ -851,13 +887,21 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
                 raise _Refused(m)
             if not isinstance(m, dict) or m.get("type") != "ready":
                 raise _WrongData(_short(m))
+            v = m.get("v")
+            v = v if isinstance(v, int) and not isinstance(v, bool) else None
+            min_chance = m.get("min_chance")
             hold_line = m.get("hold_line")
-            hold_always = m.get("hold_always")
-            hold_updates = m.get("hold_updates")
+            # hold_always and hold_updates are read from a version 3 ready only, as the LiveKit hookup reads them
+            hold_always = m.get("hold_always") if v == 3 else None
+            hold_updates = m.get("hold_updates") if v == 3 else None
             calls_heard = m.get("calls_heard")
             return _Conversation(
                 ws=ws,
                 opened_at=time.monotonic(),
+                v=v,
+                min_chance=float(min_chance)
+                if isinstance(min_chance, (int, float)) and not isinstance(min_chance, bool)
+                else None,
                 hold_line=float(hold_line) if isinstance(hold_line, (int, float)) else None,
                 hold_always=hold_always if isinstance(hold_always, bool) else None,
                 hold_updates=int(hold_updates)
@@ -939,7 +983,7 @@ class RabelBellUserTurnStrategies(ExternalUserTurnStrategies):
     Parameters:
         api_key: The Rabel API key; defaults to ``RABEL_API_KEY``. Not shown in this object's repr.
         agent: Your agent's name, which Bell learns for.
-        min_chance: How sure Bell must be before it guesses, 0.67 to 0.99.
+        min_chance: How sure Bell must be before it guesses, 0.67 to 0.99, or None for the new Bell's balanced setting.
         learn: False means this call teaches Bell nothing.
         url: The conversation endpoint or the API's base address; defaults to ``RABEL_API_URL``, then Rabel's API.
         vendor: The speech-to-text in front of the aggregator, for the API's usage reports.
@@ -962,7 +1006,7 @@ class RabelBellUserTurnStrategies(ExternalUserTurnStrategies):
 
     api_key: str | None = field(default=None, repr=False)
     agent: str = DEFAULT_AGENT
-    min_chance: float = DEFAULT_MIN_CHANCE
+    min_chance: float | None = DEFAULT_MIN_CHANCE
     learn: bool = True
     url: str | None = None
     vendor: str | None = None

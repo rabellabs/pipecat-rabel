@@ -186,6 +186,23 @@ async def test_a_guess_not_started_beside_the_speech_to_texts_reply_on_the_same_
 # ------------------------------------------------------------------------------------------------- the flag and the lines
 
 
+async def test_report_on_a_turn_with_two_guesses_started_counts_the_first_dropped_before():
+    # The new Bell guesses on "i would like", then again on "i would like to reset" when the words leave its first guess.
+    guesses = {H1: PAY_HEARD, H2: GUESS}
+    frames = [SleepFrame(0.3), start(), interim(H1), SleepFrame(0.1), interim(H2), SleepFrame(0.2), final(FINAL),
+              stop(), SleepFrame(0.1)]
+    for version, expected in ((None, {"dropped_before": 1}), (2, {})):
+        async with StandIn(guesses=guesses, guesses_a_turn=2, version=version) as api:
+            s = bell(api.url)
+            down, _, _ = await run(s, frames)
+        assert replies(down) == [(True, PAY_HEARD), (True, GUESS)]
+        (end,) = ends(api)
+        end.pop("head_start_ms")
+        # dropped_before is the new Bell's field; a version 2 API is sent the report as before
+        assert end == {"type": "end_of_turn", "text": FINAL, "guess": "kept", **expected}
+        assert s.bell.summary == {**s.bell.summary, "turns": 1, "guesses": 2, "kept": 1, "dropped": 1}
+
+
 async def test_report_off_leaves_the_field_out():
     b_off, api_off, down_off, _ = await report_run(one_turn(), report=False)
     assert ends(api_off) == [{"type": "end_of_turn", "text": FINAL}]

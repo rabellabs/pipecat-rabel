@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
-"""A local stand-in for Bell's API (version 2 of the contract), so the tests need no key and no network.
+"""A local stand-in for Bell's API (versions 2 and 3 of the contract), so the tests need no key and no network.
 
 It speaks the conversation endpoint's messages (hello, ready, heard, guess, end_of_turn, error) and can be told to
 misbehave in each way the strategy must survive: refuse with an HTTP status, refuse with an error message, be slow to
@@ -37,7 +37,11 @@ class StandIn:
     """Bell's conversation endpoint on localhost.
 
     Parameters:
-        guesses: Words heard -> the guess Bell sends for them (at most one a turn, as the contract says).
+        guesses: Words heard -> the guess Bell sends for them (at most ``guesses_a_turn`` a turn).
+        guesses_a_turn: Guesses sent at most in one turn: 1, as version 2 of the contract says; the new Bell (version
+            3) may send more.
+        version: The version ``ready`` says: None answers the hello's (3 to a version 3 hello, else 2), 2 is an API
+            without the new Bell.
         chance: The chance sent with each guess.
         refuse_http: Refuse the WebSocket upgrade with this HTTP status.
         refuse_message: Accept, read the hello, then send an error with this status and close.
@@ -58,6 +62,8 @@ class StandIn:
     """
 
     guesses: dict[str, str] = field(default_factory=dict)
+    guesses_a_turn: int = 1
+    version: int | None = None
     chance: float = 0.86
     refuse_http: int | None = None
     refuse_message: int | None = None
@@ -116,11 +122,12 @@ class StandIn:
         if self.not_ready is not None:
             await ws.send(self.not_ready)
         else:
-            await ws.send(json.dumps({"type": "ready", "v": 2, "agent": hello.get("agent", "default"),
-                                      "min_chance": hello.get("min_chance", 0.7), "hold_line": self.hold_line,
-                                      "learning": hello.get("learn", True), "calls_heard": 143,
-                                      **self.ready_extra}))
-        turn, guess_id, heard_count, turns, guessed = 1, 0, 0, 0, None
+            v = self.version if self.version is not None else (3 if hello.get("v") == 3 else 2)
+            ready = {"type": "ready", "v": v, "agent": hello.get("agent", "default"),
+                     "min_chance": hello.get("min_chance", None if v == 3 else 0.7), "hold_line": self.hold_line,
+                     "learning": hello.get("learn", True), "calls_heard": 143}
+            await ws.send(json.dumps({**ready, **self.ready_extra}))
+        turn, guess_id, heard_count, turns, guessed, sent = 1, 0, 0, 0, None, 0
         async for raw in ws:
             m = json.loads(raw)
             messages.append(m)
@@ -137,8 +144,11 @@ class StandIn:
                 text = m["text"]
                 if text in self.raw_guesses:
                     await ws.send(self.raw_guesses[text])
-                elif text in self.guesses and guessed is None:
+                elif text in self.guesses and sent < self.guesses_a_turn and (
+                    guessed is None or guessed[1] != self.guesses[text]
+                ):
                     guess_id += 1
+                    sent += 1
                     guessed = (guess_id, self.guesses[text])
                     asyncio.ensure_future(self._send_guess(ws, turn, guess_id, self.guesses[text], text))
             elif m.get("type") == "end_of_turn":
@@ -152,7 +162,7 @@ class StandIn:
                     right = _norm(guessed[1]) == _norm(m["text"])
                 await ws.send(json.dumps({"type": "end_of_turn", "turn": turn, "text": m["text"],
                                           "guess_id": guessed[0] if guessed else None, "right": right}))
-                turn, guessed, turns = turn + 1, None, turns + 1
+                turn, guessed, turns, sent = turn + 1, None, turns + 1, 0
                 if self.close_clean_after_turns is not None and turns >= self.close_clean_after_turns:
                     await ws.close(1000)
                     return

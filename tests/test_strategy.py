@@ -108,17 +108,54 @@ async def test_a_guess_starts_an_early_reply_that_is_kept(warnings):
     assert warnings == []
 
 
-async def test_hello_carries_version_2_fields_and_the_key_in_the_header():
+async def test_hello_takes_the_new_bell_and_the_key_goes_in_the_header():
     async with StandIn() as api:
-        s = bell(api.url, agent="front-desk", min_chance=0.8, learn=False, vendor="deepgram/flux-general-en")
+        s = bell(api.url, agent="front-desk", learn=False, vendor="deepgram/flux-general-en")
         await run(s, one_turn())
+    # version 3, and no min_chance: the new Bell's balanced setting
     assert api.hellos == [{
-        "type": "hello", "v": 2, "agent": "front-desk", "min_chance": 0.8, "learn": False,
+        "type": "hello", "v": 3, "agent": "front-desk", "learn": False,
         "host": "pipecat", "host_version": importlib.metadata.version("pipecat-ai"),
         "hookup": pipecat_rabel.__version__, "vendor": "deepgram/flux-general-en",
     }]
     assert api.headers[0]["Authorization"] == "Bearer test-key"
     assert "key" not in api.hellos[0]
+    assert s.bell.min_chance is None
+
+
+async def test_hello_carries_min_chance_only_when_set():
+    async with StandIn() as api:
+        s = bell(api.url, min_chance=0.8)
+        await run(s, one_turn())
+    assert api.hellos[0]["v"] == 3 and api.hellos[0]["min_chance"] == 0.8
+
+
+async def test_with_no_min_chance_the_new_bell_adds_no_bar_and_a_version_2_api_keeps_0_7():
+    # A version 3 API sends only guesses as sure as its balanced setting allows; the strategy adds no bar of its own. A
+    # version 2 API with no min_chance from either side keeps 0.3.0's 0.7.
+    got = []
+    for version in (None, 2):
+        async with StandIn(guesses={H2: GUESS}, chance=0.5, version=version, ready_extra={"min_chance": None}) as api:
+            s = bell(api.url)
+            down, _, _ = await run(s, one_turn())
+        got.append(replies(down))
+    assert got == [[(True, GUESS)], [(False, FINAL)]]
+
+
+async def test_a_version_3_ready_is_the_new_bell_and_a_version_2_ready_works_as_before():
+    seen = []
+    for version in (None, 2):
+        async with StandIn(guesses={H2: GUESS}, version=version) as api:
+            s = bell(api.url)
+
+            @s.bell.event_handler("on_ready")
+            async def on_ready(strategy, ready):
+                seen.append((ready["v"], strategy.v3))
+
+            down, _, _ = await run(s, one_turn())
+        assert replies(down) == [(True, GUESS)]
+        assert api.received[0][-1]["guess"] == "kept"
+    assert seen == [(3, True), (2, False)]
 
 
 async def test_ready_hold_line_is_kept_from_the_api():
@@ -131,7 +168,7 @@ async def test_ready_hold_line_is_kept_from_the_api():
             seen.append((ready, strategy.hold_line))
 
         await run(s, [SleepFrame(0.3)])
-    assert seen == [({"hold_line": 0.85, "calls_heard": 143}, 0.85)]
+    assert seen == [({"v": 3, "hold_line": 0.85, "calls_heard": 143}, 0.85)]
 
 
 @pytest.mark.parametrize(
@@ -167,6 +204,21 @@ async def test_ready_hold_settings_are_read_and_change_nothing(extra, always, up
     assert got[0] == base[0] and got[1] == base[1]
     assert (got[3].guesses_pushed, got[3].guesses_right) == (base[3].guesses_pushed, base[3].guesses_right) == (1, 1)
     assert warnings == []
+
+
+async def test_a_version_2_ready_has_no_hold_settings():
+    """``hold_always`` and ``hold_updates`` are the new Bell's: a version 2 ``ready`` that carries them is not read for
+    them, as the LiveKit hookup does not read them."""
+    async with StandIn(version=2, ready_extra={"hold_always": True, "hold_updates": 2}) as api:
+        s = bell(api.url)
+        seen = []
+
+        @s.bell.event_handler("on_ready")
+        async def on_ready(strategy, ready):
+            seen.append((strategy.hold_line, strategy.hold_always, strategy.hold_updates))
+
+        await run(s, [SleepFrame(0.3)])
+    assert seen == [(0.9, None, None)]
 
 
 async def test_a_wrong_guess_is_withdrawn_and_the_turn_end_reports_it():
@@ -219,7 +271,7 @@ async def test_one_guess_in_each_of_two_turns():
 
 
 async def test_two_guesses_in_one_turn_withdraw_the_first():
-    # The contract sends at most one guess a turn; were a second to come, the first is withdrawn before it starts.
+    # The new Bell can send a second guess in a turn; the first is withdrawn before the second starts.
     first = '{"type": "guess", "turn": 1, "id": 1, "text": "i would like to pay", "heard": "i would like", "chance": 0.8}'
     async with StandIn(raw_guesses={H1: first}, guesses={H2: GUESS}) as api:
         s = bell(api.url)
@@ -410,15 +462,17 @@ async def test_api_closes_mid_call_and_is_reopened(warnings):
         '{"type": "guess", "turn": 1, "id": 1, "text": "x y", "heard": "i would like to reset", "chance": 7}',
         '{"type": "guess", "turn": 1, "id": 1, "text": "x y", "heard": "i would like to reset", "chance": "high"}',
         '{"type": "guess", "turn": 1, "id": 1, "text": "x y", "heard": "i would like to reset", "chance": 0.3}',
+        '{"type": "guess", "turn": 1, "id": 1, "text": "x y", "heard": "i would like to reset"}',
         '{"type": "guess", "turn": 1, "id": 1, "text": "x y", "heard": "words never sent", "chance": 0.9}',
         '["a", "list"]',
     ],
     ids=["not-json", "no-text", "empty-text", "chance-over-1", "chance-not-a-number", "chance-under-min",
-         "unknown-heard", "not-an-object"],
+         "no-chance", "unknown-heard", "not-an-object"],
 )
 async def test_api_sends_wrong_data(warnings, raw):
+    # min_chance 0.8 set: the API's ready says it, and a guess under it is not used
     async with StandIn(raw_guesses={H2: raw}) as api:
-        await assert_fails_open(bell(api.url), one_turn(), warnings, "wrong_data")
+        await assert_fails_open(bell(api.url, min_chance=0.8), one_turn(), warnings, "wrong_data")
         # the conversation went on; no guess was started, so the report says none
         assert api.received[0][-1] == {"type": "end_of_turn", "text": FINAL, "guess": "none"}
 
