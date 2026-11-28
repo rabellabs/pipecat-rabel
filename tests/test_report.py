@@ -203,6 +203,21 @@ async def test_report_on_a_turn_with_two_guesses_started_counts_the_first_droppe
         assert s.bell.summary == {**s.bell.summary, "turns": 1, "guesses": 2, "kept": 1, "dropped": 1}
 
 
+async def test_a_turn_of_finals_only_is_sent_to_bell():
+    # A speech-to-text that sends no interims: the turn's final goes to Bell, which learns from the final words. A second
+    # final with no words between them is a turn of its own, as every final ends Bell's turn.
+    frames = [SleepFrame(0.3), start(), final(FINAL), stop(), SleepFrame(0.1),
+              start(), interim(H1), final("I would like"), final("to pay my bill."), stop(), SleepFrame(0.1)]
+    b, api, down, _ = await report_run(frames)
+    assert api.received[0] == [
+        {"type": "end_of_turn", "text": FINAL, "guess": "none"},
+        {"type": "heard", "text": H1},
+        {"type": "end_of_turn", "text": "I would like", "guess": "none"},
+        {"type": "end_of_turn", "text": "to pay my bill.", "guess": "none"},
+    ]
+    assert b.stats.turns_sent == 3 and b.summary["turns"] == 3
+
+
 async def test_report_off_leaves_the_field_out():
     b_off, api_off, down_off, _ = await report_run(one_turn(), report=False)
     assert ends(api_off) == [{"type": "end_of_turn", "text": FINAL}]

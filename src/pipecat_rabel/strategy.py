@@ -146,7 +146,8 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
     the turn's end as it does. What it adds:
 
     - The words: each :class:`~pipecat.frames.frames.InterimTranscriptionFrame` with words is sent to Bell as ``heard``,
-      each :class:`~pipecat.frames.frames.TranscriptionFrame` with words as ``end_of_turn``.
+      each :class:`~pipecat.frames.frames.TranscriptionFrame` with words as ``end_of_turn``, also with no interim
+      before it, so Bell learns from a speech-to-text that sends finals only.
     - Bell's guess at the whole turn, written as the speech-to-text writes the call's words: the words heard as it
       showed them, then each word Bell adds as it last wrote that word in this call. An early reply is started on it
       with ``start_user_turn_speculation()``, the call
@@ -596,6 +597,10 @@ class RabelBellUserTurnStopStrategy(EagerUserTurnStopStrategy):
             self._form.final(frame.text)
         except Exception:  # noqa: BLE001 - the form is only for writing guesses
             pass
+        if not self._in_turn:
+            # A turn of finals only (a speech-to-text that sends no interims, or a second final with no words between):
+            # it goes to Bell too. The API takes an end_of_turn with no heard before it and learns from the final words.
+            self._begin_turn()
         conv, guess = self._turn_conv, self._pushed_guess
         report, head_start_ms = self._report_of(frame.text, final_at)
         # The new Bell can send more than one guess a turn. The report is on the guess started last. Each guess started
