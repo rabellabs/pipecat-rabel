@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
-"""P1 and P2 of the code audit of 22 November 2026, and P3 to P6 for the new Bell (28 November): Bell beside Flux's eager
+"""P1 and P2 of the code audit of 22 November 2026, and P3 to P7 for the new Bell (28 November): Bell beside Flux's eager
 end of turn, with a real LLM service.
 
 The harness runs Pipecat's own user aggregator with the strategies under test, then a real ``LLMService`` subclass, then
@@ -225,7 +225,7 @@ async def test_p2_after_a_vad_resume_flux_eager_reply_is_not_held_back():
     )
 
 
-# P3 to P6, 28 November 2026 (ENG-62): the new Bell (version 3) can send a second guess in a turn when the words leave its
+# P3 to P7, 28 November 2026: the new Bell (version 3) can send a second guess in a turn when the words leave its
 # first, and a guess equal to the words heard (its bet that the turn ends there). The same measure: with Bell, the reply
 # to the caller's real words starts no later than with Pipecat's eager strategies alone, and no reply on a wrong guess
 # passes the gate.
