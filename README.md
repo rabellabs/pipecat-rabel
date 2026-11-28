@@ -171,7 +171,7 @@ The method, the other rows, the script and its data are in [Rabel's benchmark](h
 uv run --extra test pytest
 ```
 
-135 tests, with no key and no network, against a local stand-in for the API, with the strategy in Pipecat's own user
+137 tests, with no key and no network, against a local stand-in for the API, with the strategy in Pipecat's own user
 aggregator. Among them, the later-reply check runs Bell beside Flux's eager end of turn through a local LLM service and
 Pipecat's speculation gate: no reply to the caller's words starts later with Bell than with Pipecat's eager strategies
 alone. A [workflow](https://github.com/rabellabs/pipecat-rabel/blob/main/.github/workflows/nightly.yml) also runs them every night against Pipecat's main branch.

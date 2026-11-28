@@ -15,8 +15,8 @@
   Bell adds as this call's finals last wrote it, with no space in a script written without spaces (Japanese, Chinese,
   Thai). Bell's guesses come in the API's words, and Pipecat's `NormalizedMatch` splits "E-Mail" into two words and
   keeps the spaces between characters, so a right guess with such a word, or in such a script, was always withdrawn.
-  Where a script without spaces meets a spaced one (Chinese and a Latin word), the space is written as the call's
-  finals write it.
+  Where a script without spaces meets a spaced one (Chinese and a Latin word, or a Chinese name in an English turn), a
+  space is written unless the call's finals write none there.
 - A guess that comes while the speech-to-text's own early reply is under way no longer withdraws it. It waits, and
   starts if the caller's words reach it. Before, a guess made on earlier words that arrived just after Flux's eager end
   of turn on other words replaced Flux's reply. When the turn then ended on Flux's words, the reply started at the turn's
@@ -35,7 +35,7 @@
 - The later-reply check run again, with six new cases: a second guess right, two wrong beside Flux's eager end of
   turn, two wrong with Bell alone, a guess that the turn ends on the words heard, and a guess that comes after Flux's
   eager end of turn, and a developer's own match policy that is not transitive. With Bell, no reply to the caller's
-  words starts later than with Pipecat's eager strategies alone. 135 tests, on Pipecat 1.16.0 and 1.17.0.
+  words starts later than with Pipecat's eager strategies alone. 137 tests, on Pipecat 1.16.0 and 1.17.0.
 - Not taken from the LiveKit hookup's 1.9.0.1 and 1.9.0.2, because they are LiveKit's own: the count of LiveKit's early
   starts, no guess while the agent's reply is under way (Pipecat starts no early reply outside the caller's turn, and a
   guess never counts as the caller's words here), a final after the end of speech (Bell's turn here ends at the final,
