@@ -103,3 +103,38 @@ async def test_finals_that_carry_their_own_spaces_are_joined_as_pipecat_joins_th
         down, _, _ = await run(s, frames)
     assert replies(down) == [(True, "パスワードをリセットしたい")]
     assert not any(isinstance(f, UserTurnResponseCancelFrame) for f in down)
+
+
+# ------------------------------------------------------------------------------- where two scripts meet
+
+def test_the_space_where_two_scripts_meet_is_written_as_the_calls_finals_write_it():
+    # before any final has shown a meeting of the two scripts: no space, as before
+    assert written("我想用", ("chatgpt",), CallForm()) == "我想用chatgpt"
+    spaced, unspaced = CallForm(), CallForm()
+    spaced.final("我想用 chatgpt 写。")
+    unspaced.final("我想用chatgpt写。")
+    assert written("我想用", ("gemini",), spaced) == "我想用 gemini"
+    assert written("我想用", ("gemini",), unspaced) == "我想用gemini"
+    # the other way round, and a mark between the two is no meeting of them
+    assert written("gemini", ("很", "好"), spaced) == "gemini 很好"
+    assert written("gemini", ("很", "好"), unspaced) == "gemini很好"
+    marked = CallForm()
+    marked.final("我想用 chatgpt。Yes 好的。")
+    assert written("我想用", ("gemini",), marked) == "我想用 gemini"
+    # before any final and without one language named: no Latin space or stop in a script without spaces
+    assert written("残高を", ("確", "認"), CallForm()) == "残高を確認"
+
+
+async def test_a_right_guess_where_a_chinese_turn_meets_a_latin_word_is_kept():
+    # The call's speech-to-text writes a space where Chinese meets a Latin word; the guess must too, or NormalizedMatch
+    # (which keeps spaces) withdraws a right guess.
+    frames = [SleepFrame(0.3), start(), interim("我想用"), SleepFrame(0.1), final("我想用 chatgpt 写。"), stop(),
+              SleepFrame(0.1), start(), interim("我想试试"), SleepFrame(0.2), final("我想试试 gemini。"), stop(),
+              SleepFrame(0.1)]
+    async with StandIn(guesses={"我想试试": "我 想 试 试 gemini"}) as api:
+        s = bell(api.url)
+        down, _, _ = await run(s, frames)
+    got = replies(down)
+    assert got[-1] == (True, "我想试试 gemini")
+    assert not any(isinstance(f, UserTurnResponseCancelFrame) for f in down)
+    assert [e["guess"] for e in ends(api)] == ["none", "kept"]

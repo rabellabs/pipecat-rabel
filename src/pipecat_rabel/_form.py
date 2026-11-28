@@ -14,8 +14,9 @@ words never matched a final with such a word or in such a script, and its early 
 
 The guess is therefore written from the speech-to-text's own text of the words heard, as it showed them, followed by the
 words Bell adds, each as the speech-to-text last wrote it in a final transcript of this call. A word the call has not
-shown in a final stays as Bell sent it. A word goes after a space unless the text before it or the word itself is in a
-script written without spaces. Nothing about a language is assumed: the call's own transcripts are copied.
+shown in a final stays as Bell sent it. A word goes after a space between two words of spaced scripts, with none between
+two of a script written without spaces, and where the two meet as the call's finals write it (none before any final has
+shown a meeting). Nothing about a language is assumed: the call's own transcripts are copied.
 """
 
 import re
@@ -60,10 +61,13 @@ def _is_mark(c: str) -> bool:
 
 
 class CallForm:
-    """How this call's speech-to-text has written each word in its final transcripts."""
+    """How this call's speech-to-text has written each word in its final transcripts, and whether it writes a space
+    where a script without spaces meets a spaced one."""
 
     def __init__(self):
         self._surface: dict[str, str] = {}
+        # meetings of a script without spaces and a spaced one written with a space, less those written without
+        self._script_gap = 0
 
     def final(self, text: str):
         """A final transcript, as the speech-to-text wrote it. A word that opens it is not read: its capital may be
@@ -78,6 +82,23 @@ class CallForm:
             while b > a and _is_mark(tok[b - 1]):
                 b -= 1
             self._surface[w[0]] = tok[a:b]
+        prev, gap = "", False
+        for c in text:
+            if c.isspace():
+                gap = True
+                continue
+            if not c.isalnum():  # a mark between them: no meeting of the two scripts
+                prev, gap = "", False
+                continue
+            if prev and _unspaced(prev) != _unspaced(c):
+                self._script_gap += 1 if gap else -1
+            prev, gap = c, False
+
+    @property
+    def spaces_scripts(self) -> bool:
+        """A space where a script without spaces meets a spaced one, as most of this call's finals have written it;
+        none before any final has shown one."""
+        return self._script_gap > 0
 
     def word(self, w: str) -> str:
         """The word as the call last wrote it, else as Bell sent it."""
@@ -91,11 +112,13 @@ def _unspaced(c: str) -> bool:
 
 def written(shown: str, added: tuple[str, ...], form: CallForm) -> str:
     """The guess: ``shown`` (the speech-to-text's text of the words heard, as it showed them), then the words Bell
-    adds after them, each as this call's finals have written it, after a space unless the text before it or the word
-    is in a script written without spaces."""
+    adds after them, each as this call's finals have written it: after a space between two words of spaced scripts,
+    with none between two of a script written without spaces, and where the two meet as this call's finals write it."""
     out = shown.strip()
     for w in (form.word(w) for w in added):
-        if out and not (_unspaced(out[-1]) or _unspaced(w[:1])):
-            out += " "
+        if out:
+            before, after = _unspaced(out[-1]), _unspaced(w[:1])
+            if form.spaces_scripts if before != after else not before:
+                out += " "
         out += w
     return out
