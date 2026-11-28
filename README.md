@@ -105,7 +105,7 @@ The bundle and the strategy take the same settings. The strategy is `strategies.
 |---|---|---|
 | `api_key` | `RABEL_API_KEY` | Without a key Bell stays off, the strategy is Pipecat's eager one, and one line is logged. |
 | `agent` | `"default"` | The agent Bell learns for: 1 to 64 lower-case letters, digits, `-` and `_`. Calls that share an agent name share what Bell learns. Give each voice agent you run its own name, such as `front-desk` or `billing`, and keep all of that agent's calls under it. |
-| `min_chance` | `0.7` | How sure Bell must be before it guesses, 0.67 to 0.99. Higher means fewer guesses and fewer wrong ones. |
+| `min_chance` | `None` | How sure Bell must be before it guesses. `None` is the new Bell's balanced setting. Set it from 0.67 to 0.99 and every guess must also be at least that sure: fewer guesses, fewer wrong ones and fewer right ones. |
 | `learn` | `True` | `False` means this call teaches Bell nothing. |
 | `report` | `True` | Tells the API at each turn's end whether the guess was kept or dropped, with no words, so the agent's status can show it. |
 | `user` | `None` | An id you choose for the person on the call. Bell does not use it yet. Never a name, a number or an address. |
@@ -125,6 +125,11 @@ and failures by kind.
 On recorded, scripted calls to one bank (Harper Valley), in English, on Deepgram Flux's words. Bell learned from 1,070
 calls by 27 callers and was measured on 376 calls by 28 callers it had never heard (95% intervals, by whole calls).
 
+These numbers were read with `pipecat-rabel` 0.3.0 and `livekit-plugins-rabel` 1.8.13, which got the earlier Bell.
+0.4.0 gets the new Bell, which guesses on more turns. Under LiveKit's default turn ending with `max_retries` 4, the new
+Bell started the reply 172 ms a turn sooner [159, 184], at 0.41 more LLM calls a turn (`livekit-plugins-rabel` 1.9.0.1,
+27 November 2026). Pipecat's row has not been measured with the new Bell yet.
+
 - On Pipecat 1.16.0 with Flux deciding the end of the turn, Bell started the reply 170 ms a turn sooner [159, 182] than
   with no early start, at 0.07 more LLM calls a turn. That is when the LLM starts. Pipecat holds an early reply until the
   turn ends, so the caller hears less of it: in one reading with Claude Haiku 5.5 and Deepgram Aura-2, the first audio came
@@ -140,19 +145,22 @@ The method, the other rows, the script and its data are in [Rabel's benchmark](h
 
 - **The numbers come from one kind of call:** scripted calls to one bank, in English, on Flux's words. On freer speech we
   have only looked informally, and Bell mostly stayed quiet. No live deployment's callers and no other language have been
-  measured.
+  measured. In another language, or a script written without spaces, a guess is written as the call's speech-to-text
+  writes its words so that Pipecat's check can keep it. The tests cover that; no call has measured it.
 - **A wrong guess costs one LLM call** and nothing the caller hears, when these turn strategies end the turn. If your app,
   or a turn processor ahead of the aggregator such as `UserTurnProcessor`, pushes `UserStoppedSpeakingFrame` itself,
   Pipecat releases the early reply before the words are checked and the caller can hear both replies.
 - **It takes the place of Smart Turn.** Like Pipecat's eager strategies, it leaves the end of the turn to the
-  speech-to-text, so the speech-to-text must end turns and send interim transcriptions, as Flux does.
+  speech-to-text, so the speech-to-text must end turns and send interim transcriptions, as Flux does. One that sends
+  finals only still teaches Bell, but gets no guess.
 - **A local VAD can withdraw an early start** when the caller pauses and speaks again. That start costs one LLM call and
   gains nothing; the reply starts early again when the words reach Bell's guess or Flux's eager end of turn comes.
 - **A reply started on a guess never runs a tool call.** Pipecat withdraws it and the reply to the final words runs it.
 - **It fails open.** While the API is unreachable, slow, refusing or sending what the strategy cannot read, Bell starts no
   early reply, the turn goes exactly as with Pipecat's eager strategy, and one line is logged for each kind of failure.
   The pipeline never waits for the API. After a busy, slow or unreachable API it tries again on its own; after a refused
-  key, no minutes left or an unknown agent, Bell stays off for the rest of the call.
+  key, no minutes left or an unknown agent, Bell stays off for the rest of the call. A connection that goes silent is
+  noticed within about 20 seconds and reopened.
 - **The stats and the turn's report count a refused guess differently.** A guess the strategy refuses as unreadable,
   under `min_chance`, late or for other words counts as dropped in `strategy.stats` and shows as "none" in the turn's
   report.
@@ -163,8 +171,10 @@ The method, the other rows, the script and its data are in [Rabel's benchmark](h
 uv run --extra test pytest
 ```
 
-112 tests, with no key and no network, against a local stand-in for the API, with the strategy in Pipecat's own user
-aggregator. A [workflow](https://github.com/rabellabs/pipecat-rabel/blob/main/.github/workflows/nightly.yml) also runs them every night against Pipecat's main branch.
+131 tests, with no key and no network, against a local stand-in for the API, with the strategy in Pipecat's own user
+aggregator. Among them, the later-reply check runs Bell beside Flux's eager end of turn through a local LLM service and
+Pipecat's speculation gate: no reply to the caller's words starts later with Bell than with Pipecat's eager strategies
+alone. A [workflow](https://github.com/rabellabs/pipecat-rabel/blob/main/.github/workflows/nightly.yml) also runs them every night against Pipecat's main branch.
 
 Tested with Pipecat 1.16.0 and 1.17.0 on Python 3.11, 3.12 and 3.13.
 

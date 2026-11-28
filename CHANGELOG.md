@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.0 - 2026-11-28
+
+- The new Bell. The hello says `"v": 3` and carries `min_chance` only when you set it. Its default is now None, the
+  new Bell's balanced setting. An API without the new Bell answers with a version 2 `ready`, and the strategy works as
+  0.3.0 did, with `min_chance` 0.7.
+- `hold_always` and `hold_updates` are read from a version 3 `ready` only. `strategy.v3` says whether the open
+  conversation has the new Bell, and `on_ready`'s dict carries the version (`v`). A version 3 guess with no `chance` is
+  not used.
+- The new Bell can send more than one guess in a turn. Each new guess withdraws the reply under way before its own
+  starts, as before. The turn's report is on the guess started last, and `dropped_before` counts the guesses started
+  before it. The summary counts each of them as dropped.
+- A guess is written as the call's speech-to-text writes its words: the words heard as it showed them, then each word
+  Bell adds as this call's finals last wrote it, with no space in a script written without spaces (Japanese, Chinese,
+  Thai). Bell's guesses come in the API's words, and Pipecat's `NormalizedMatch` splits "E-Mail" into two words and
+  keeps the spaces between characters, so a right guess with such a word, or in such a script, was always withdrawn.
+- A guess that comes while the speech-to-text's own early reply is under way no longer withdraws it. It waits, and
+  starts if the caller's words reach it. Before, a guess made on earlier words that arrived just after Flux's eager end
+  of turn on other words replaced Flux's reply. When the turn then ended on Flux's words, the reply started at the turn's
+  end, later than without Bell (0.41 s against 0.09 s in the new test). 0.3.0 has the same fault.
+- The check at the turn's end joins the committed transcripts as Pipecat's eager strategy joins them.
+- A turn of finals only goes to Bell, so Bell learns from a speech-to-text that sends no interims. It still guesses
+  only on interims.
+- A connection to the API that goes silent after `ready` is noticed within about 20 seconds and reopened: a ping every
+  5 seconds, 15 seconds for its answer, 1 second for the close.
+- The later-reply check run again, with five new cases: a second guess right, two wrong beside Flux's eager end of
+  turn, two wrong with Bell alone, a guess that the turn ends on the words heard, and a guess that comes after Flux's
+  eager end of turn. With Bell, no reply to the caller's words starts later than with Pipecat's eager strategies alone.
+  131 tests, on Pipecat 1.16.0 and 1.17.0.
+- Not taken from the LiveKit hookup's 1.9.0.1 and 1.9.0.2, because they are LiveKit's own: the count of LiveKit's early
+  starts, no guess while the agent's reply is under way (Pipecat starts no early reply outside the caller's turn, and a
+  guess never counts as the caller's words here), a final after the end of speech (Bell's turn here ends at the final,
+  not at the end of speech), the wrapped stream's flush need, and `turn_detection="stt"`'s early start.
+
 ## 0.3.0 - 2026-11-23
 
 - Bell is now a user turn stop strategy, on the door Pipecat's docs give a custom stop strategy for answering early:

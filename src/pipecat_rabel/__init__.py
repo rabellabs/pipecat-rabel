@@ -6,7 +6,7 @@
 
 """Bell for Pipecat: start the reply on Bell's guess at the caller's words, before the caller finishes."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from pipecat_rabel.strategy import (  # noqa: E402
     RABEL_API_URL,
