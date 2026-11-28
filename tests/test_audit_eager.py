@@ -4,7 +4,8 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
-"""P1 and P2 of the code audit of 22 November 2026: Bell beside Flux's eager end of turn, with a real LLM service.
+"""P1 and P2 of the code audit of 22 November 2026, and P3 to P6 for the new Bell (28 November): Bell beside Flux's eager
+end of turn, with a real LLM service.
 
 The harness runs Pipecat's own user aggregator with the strategies under test, then a real ``LLMService`` subclass, then
 a recorder. The service is a local stand-in that runs one completion at a time inline, as Pipecat's OpenAI and Anthropic
@@ -138,8 +139,8 @@ async def through_llm(strategies, frames) -> Run:
     return Run(strategies, llm, recorder)
 
 
-async def bell_and_alone(guesses, frames) -> tuple[Run, Run]:
-    async with StandIn(guesses=guesses) as api:
+async def bell_and_alone(guesses, frames, **standin) -> tuple[Run, Run]:
+    async with StandIn(guesses=guesses, **standin) as api:
         with_bell = await through_llm(bell(api.url), frames)
     alone = await through_llm(EagerUserTurnStrategies(), frames)
     return with_bell, alone
@@ -222,3 +223,72 @@ async def test_p2_after_a_vad_resume_flux_eager_reply_is_not_held_back():
         f"Pipecat's eager strategy alone (tolerance {TOLERANCE} s). With Bell: {with_bell.describe()}. "
         f"Alone: {alone.describe()}"
     )
+
+
+# P3 to P6, 28 November 2026 (ENG-62): the new Bell (version 3) can send a second guess in a turn when the words leave its
+# first, and a guess equal to the words heard (its bet that the turn ends there). The same measure: with Bell, the reply
+# to the caller's real words starts no later than with Pipecat's eager strategies alone, and no reply on a wrong guess
+# passes the gate.
+P3_H1, P3_G1 = "i need to", "i need to reset my password"
+P3_H2, P3_G2 = "i need to check", "i need to check my balance"
+P3_EAGER = "i need to check my balance"
+P3_FINAL = "I need to check my balance."
+
+
+def no_wrong_guess_heard(with_bell: Run, *wrong: str) -> list[str]:
+    return [f"a reply started on Bell's wrong guess {w!r} passed the gate" for w in wrong
+            if any(_MATCH.matches(words, w) for _, _, words in with_bell.heard())]
+
+
+def not_later(with_bell: Run, alone: Run, final_words: str) -> list[str]:
+    late_bell, late_alone = with_bell.first_reply_to(final_words), alone.first_reply_to(final_words)
+    if late_bell is None or late_alone is None or late_bell > late_alone + TOLERANCE:
+        return [f"the reply to the real words started {late_bell} s after the turn's end with Bell, {late_alone} s with "
+                f"Pipecat's eager strategy alone (tolerance {TOLERANCE} s)"]
+    return []
+
+
+async def test_p3_a_second_guess_that_is_right_is_kept_and_no_reply_is_later():
+    # Flux eager on. Bell's first guess is wrong; the words leave it and its second, right, starts before Flux's eager
+    # end of turn on the same words, which is held back.
+    frames = [SleepFrame(0.3), start(), interim(P3_H1), SleepFrame(0.1), interim(P3_H2), SleepFrame(0.1),
+              interim(P3_EAGER), eager(P3_EAGER), SleepFrame(0.3), final(P3_FINAL), stop(), SleepFrame(2.0)]
+    with_bell, alone = await bell_and_alone({P3_H1: P3_G1, P3_H2: P3_G2}, frames, guesses_a_turn=2)
+    faults = no_wrong_guess_heard(with_bell, P3_G1) + not_later(with_bell, alone, P3_FINAL)
+    assert with_bell.strategies.bell.stats.guesses_pushed == 2
+    assert not faults, "; ".join(faults) + f". With Bell: {with_bell.describe()}. Alone: {alone.describe()}"
+
+
+async def test_p4_two_wrong_guesses_then_flux_eager_reply_on_other_words_is_not_late():
+    # Flux eager on. Both of Bell's guesses are wrong; Flux's eager end of turn comes on other words while the second
+    # runs, and the turn ends while Flux's reply is under way.
+    final_words = "I need to check my card."
+    frames = [SleepFrame(0.3), start(), interim(P3_H1), SleepFrame(0.1), interim(P3_H2), SleepFrame(0.1),
+              eager("i need to check my card"), SleepFrame(0.2), final(final_words), stop(), SleepFrame(2.0)]
+    with_bell, alone = await bell_and_alone({P3_H1: P3_G1, P3_H2: P3_G2}, frames, guesses_a_turn=2)
+    faults = no_wrong_guess_heard(with_bell, P3_G1, P3_G2) + not_later(with_bell, alone, final_words)
+    assert with_bell.strategies.bell.stats.guesses_pushed == 2
+    assert not faults, "; ".join(faults) + f". With Bell: {with_bell.describe()}. Alone: {alone.describe()}"
+
+
+async def test_p5_bell_alone_two_wrong_guesses_the_last_under_way_at_the_turns_end_is_not_late():
+    # The README's measured setup: Flux's eager end of turn off. Bell's second wrong guess is still generating when the
+    # turn ends; its withdrawal must stop it at once, so the reply to the final words starts as it does without Bell.
+    final_words = "I need to check my card."
+    frames = [SleepFrame(0.3), start(), interim(P3_H1), SleepFrame(0.1), interim(P3_H2), SleepFrame(0.15),
+              final(final_words), stop(), SleepFrame(2.0)]
+    with_bell, alone = await bell_and_alone({P3_H1: P3_G1, P3_H2: P3_G2}, frames, guesses_a_turn=2)
+    faults = no_wrong_guess_heard(with_bell, P3_G1, P3_G2) + not_later(with_bell, alone, final_words)
+    assert with_bell.strategies.bell.stats.guesses_pushed == 2
+    assert not faults, "; ".join(faults) + f". With Bell: {with_bell.describe()}. Alone: {alone.describe()}"
+
+
+async def test_p6_bells_bet_that_the_turn_ends_on_the_words_heard_is_kept_and_not_late():
+    # The new Bell's guess equal to the words heard, before Flux's eager end of turn on the same words.
+    frames = [SleepFrame(0.3), start(), interim(P3_H1), SleepFrame(0.05), interim(P3_EAGER), SleepFrame(0.1),
+              eager(P3_EAGER), SleepFrame(0.3), final(P3_FINAL), stop(), SleepFrame(2.0)]
+    with_bell, alone = await bell_and_alone({P3_EAGER: P3_EAGER}, frames)
+    faults = not_later(with_bell, alone, P3_FINAL)
+    st = with_bell.strategies.bell.stats
+    assert st.guesses_pushed == 1 and st.eager_held_back == 1
+    assert not faults, "; ".join(faults) + f". With Bell: {with_bell.describe()}. Alone: {alone.describe()}"
